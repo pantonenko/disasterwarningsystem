@@ -1,0 +1,210 @@
+// ========================================================================
+// Detachable Accessible Wristband (Receives IR Signals + Dock Sync)
+// Drives the single Piezo Buzzer (amplified when docked) & Vibration Motor
+// ========================================================================
+
+const int IR_PIN = 7;
+const int BUZZER_PIN = 3;
+const int VIB_PIN = 4;
+
+
+int currentZone = 1; // 1 = Off/Safe, 2 = Caution, 3 = Evacuate, 4 = Impact
+unsigned long previousMillis = 0;
+bool pulseState = false;
+
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(IR_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(VIB_PIN, OUTPUT);
+  
+  // Force completely silent on startup
+  noTone(BUZZER_PIN);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(VIB_PIN, LOW);
+  Serial.println("Wristband Ready (Instant Response).");
+}
+
+
+void loop() {
+  // 1. Continuously listen for IR remote without any delay() blocking
+  int cmd = readIRButton(IR_PIN);
+  if (cmd != -1) {
+    Serial.print("IR Command: ");
+    Serial.println(cmd);
+
+
+    if (cmd == 12 || cmd == 22) { // Button 1 or 0: Stop immediately
+      currentZone = 1;
+      pulseState = false;
+      noTone(BUZZER_PIN);
+      digitalWrite(BUZZER_PIN, LOW);
+      digitalWrite(VIB_PIN, LOW);
+    } 
+    else if (cmd == 24) currentZone = 2; // Button 2: Caution
+    else if (cmd == 94) currentZone = 3; // Button 3: Evacuate
+    else if (cmd == 8) currentZone = 4; // Button 4: Impact
+  }
+
+
+  // 2. Non-blocking buzzer & vibration timing
+  if (currentZone == 1) {
+    noTone(BUZZER_PIN);
+    digitalWrite(BUZZER_PIN, LOW);
+    digitalWrite(VIB_PIN, LOW);
+    return;
+  }
+
+
+  unsigned long currentMillis = millis();
+  int freq = 1000;
+  unsigned long onTime = 200;
+  unsigned long offTime = 800;
+
+
+  if (currentZone == 3) {
+    freq = 1800;
+    onTime = 150;
+    offTime = 150;
+  } else if (currentZone == 4) {
+    freq = 2500;
+    onTime = 50;
+    offTime = 50;
+  }
+
+
+  if (pulseState && (currentMillis - previousMillis >= onTime)) {
+    pulseState = false;
+    previousMillis = currentMillis;
+    noTone(BUZZER_PIN);
+    digitalWrite(BUZZER_PIN, LOW);
+    digitalWrite(VIB_PIN, LOW);
+  } 
+  else if (!pulseState && (currentMillis - previousMillis >= offTime)) {
+    pulseState = true;
+    previousMillis = currentMillis;
+    tone(BUZZER_PIN, freq);
+    digitalWrite(VIB_PIN, HIGH);
+  }
+}
+
+
+// Lightweight NEC infrared pulse reader
+int readIRButton(int pin) {
+  if (digitalRead(pin) == LOW) {
+    unsigned long t = micros();
+    while (digitalRead(pin) == LOW) { if (micros() - t > 15000) return -1; }
+    t = micros();
+    while (digitalRead(pin) == HIGH) { if (micros() - t > 7000) return -1; }
+    if (micros() - t < 2500) return -1;
+
+
+    unsigned long data = 0;
+    for (int i = 0; i < 32; i++) {
+      t = micros();
+      while (digitalRead(pin) == LOW) { if (micros() - t > 2500) return -1; }
+      t = micros();
+      while (digitalRead(pin) == HIGH) { if (micros() - t > 3500) return -1; }
+      if (micros() - t > 1000) data |= (1UL << i);
+    }
+    return (data >> 16) & 0xFF;
+  }
+  return -1;
+}
+const int OFF_BTN_PIN = 2;
+const int BUZZER_PIN  = 3; // The 1 Buzzer (Acts as wall alarm when docked, wrist alert when worn)
+const int VIB_PIN     = 4; // Optional Vibration Motor for deaf/hard-of-hearing accessibility
+const int IR_PIN      = 7; // Wristband's own IR Sensor
+
+int currentZone = 1; // 0 = Off, 1 = Green (Silent), 2 = Yellow (Med), 3 = Red (Fast), 4 = Super Close
+bool lastButtonState = HIGH;
+unsigned long previousBeepTime = 0;
+bool pulseState = false;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(OFF_BTN_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(VIB_PIN, OUTPUT);
+  pinMode(IR_PIN, INPUT);
+}
+
+void loop() {
+  // 1. Check Wristband "Off" Button
+  bool btnState = digitalRead(OFF_BTN_PIN);
+  if (lastButtonState == HIGH && btnState == LOW) {
+    delay(50);
+    currentZone = 0; // Silence wristband alarm
+    noTone(BUZZER_PIN);
+    digitalWrite(VIB_PIN, LOW);
+  }
+  lastButtonState = btnState;
+
+  // 2. Listen for IR Remote Signals Independently
+  int irKey = readIRButton(IR_PIN);
+  if (irKey != -1) {
+    currentZone = irKey;
+    if (currentZone <= 1) {
+      noTone(BUZZER_PIN);
+      digitalWrite(VIB_PIN, LOW);
+    }
+  }
+
+  // 3. Run Graduated Interval Buzzer & Vibration
+  if (currentZone == 2) {
+    // YELLOW: Medium Interval (500ms at 1000Hz)
+    runGraduatedPulse(500, 1000);
+  } else if (currentZone == 3) {
+    // RED (Close): Fast Interval (200ms at 1800Hz)
+    runGraduatedPulse(200, 1800);
+  } else if (currentZone == 4) {
+    // RED (Super Close): Rapid Interval (80ms at 2500Hz)
+    runGraduatedPulse(80, 2500);
+  } else {
+    // GREEN or OFF: Silent
+    noTone(BUZZER_PIN);
+    digitalWrite(VIB_PIN, LOW);
+  }
+}
+
+void runGraduatedPulse(unsigned long interval, int freq) {
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousBeepTime >= interval) {
+    previousBeepTime = currentMillis;
+    pulseState = !pulseState;
+    if (pulseState) {
+      tone(BUZZER_PIN, freq);
+      digitalWrite(VIB_PIN, HIGH);
+    } else {
+      noTone(BUZZER_PIN);
+      digitalWrite(VIB_PIN, LOW);
+    }
+  }
+}
+
+// Universal NEC IR Decoder (Matches Wall Unit)
+int readIRButton(int pin) {
+  if (digitalRead(pin) == LOW) {
+    unsigned long lowTime = pulseIn(pin, HIGH, 25000);
+    if (lowTime < 3500 || lowTime > 5500) return -1;
+
+    unsigned long data = 0;
+    for (int i = 0; i < 32; i++) {
+      while (digitalRead(pin) == LOW);
+      unsigned long space = pulseIn(pin, HIGH, 5000);
+      if (space == 0) return -1;
+      if (space > 1000) {
+        data |= (1UL << i);
+      }
+    }
+    byte cmd = (data >> 16) & 0xFF;
+    
+    if (cmd == 16 || cmd == 0x0C) return 1; // Button 1: Green/Far
+    if (cmd == 17 || cmd == 0x18) return 2; // Button 2: Yellow/Nearby
+    if (cmd == 18 || cmd == 0x5E) return 3; // Button 3: Red/Close
+    if (cmd == 20 || cmd == 0x08) return 4; // Button 4: Red/Super Close
+    if (cmd == 12 || cmd == 0x45 || cmd == 0 || cmd == 0x16) return 0; // Button 0/Power: Off
+  }
+  return -1;
+}
