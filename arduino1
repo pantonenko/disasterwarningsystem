@@ -1,0 +1,137 @@
+//
+#include <LiquidCrystal.h>
+
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+const int OFF_BTN_PIN = 6;
+const int IR_PIN      = 7;
+const int DOCK_OUT_PIN= 8;
+const int RED_LED     = A0;
+const int YELLOW_LED  = A1;
+const int GREEN_LED   = A2;
+
+int currentZone = 1; 
+bool lastButtonState = HIGH;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(OFF_BTN_PIN, INPUT_PULLUP);
+  pinMode(IR_PIN, INPUT);
+  pinMode(DOCK_OUT_PIN, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+
+  lcd.begin(16, 2);
+  updateWallDisplay(1);
+}
+
+void loop() {
+  bool btnState = digitalRead(OFF_BTN_PIN);
+  if (lastButtonState == HIGH && btnState == LOW) {
+    delay(50);
+    if (currentZone != 0) updateWallDisplay(0);
+    else updateWallDisplay(1);
+  }
+  lastButtonState = btnState;
+
+  int irKey = readIRButton(IR_PIN);
+  if (irKey != -1) {
+    if (irKey == 1) updateWallDisplay(1);
+    else if (irKey == 2) updateWallDisplay(2);
+    else if (irKey == 3) updateWallDisplay(3);
+    else if (irKey == 4) updateWallDisplay(4);
+    else if (irKey == 0) updateWallDisplay(0);
+  }
+}
+
+void updateWallDisplay(int zone) {
+  currentZone = zone;
+  lcd.clear();
+
+  if (zone == 0) {
+    setLEDs(LOW, LOW, LOW);
+    digitalWrite(DOCK_OUT_PIN, LOW);
+    lcd.setCursor(0, 0);
+    lcd.print("SYSTEM SILENCED");
+    lcd.setCursor(0, 1);
+    lcd.print("Press to Resume");
+  } else if (zone == 1) {
+    setLEDs(LOW, LOW, HIGH);
+    digitalWrite(DOCK_OUT_PIN, LOW);
+    lcd.setCursor(0, 0);
+    lcd.print("NEWS: AREA SAFE");
+    lcd.setCursor(0, 1);
+    lcd.print("Storm 50mi Away");
+  } else if (zone == 2) {
+    setLEDs(LOW, HIGH, LOW);
+    digitalWrite(DOCK_OUT_PIN, HIGH);
+    lcd.setCursor(0, 0);
+    lcd.print("NEWS: CAUTION!");
+    lcd.setCursor(0, 1);
+    lcd.print("Storm 15mi-Prep");
+  } else if (zone == 3) {
+    setLEDs(HIGH, LOW, LOW);
+    digitalWrite(DOCK_OUT_PIN, HIGH);
+    lcd.setCursor(0, 0);
+    lcd.print("ALERT: EVACUATE");
+    lcd.setCursor(0, 1);
+    lcd.print("5mi! Use Stairs");
+  } else if (zone == 4) {
+    setLEDs(HIGH, LOW, LOW);
+    digitalWrite(DOCK_OUT_PIN, HIGH);
+    lcd.setCursor(0, 0);
+    lcd.print("DANGER: IMPACT!");
+    lcd.setCursor(0, 1);
+    lcd.print("1mi! EVAC NOW!!");
+  }
+}
+
+void setLEDs(bool r, bool y, bool g) {
+  digitalWrite(RED_LED, r);
+  digitalWrite(YELLOW_LED, y);
+  digitalWrite(GREEN_LED, g);
+}
+
+int readIRButton(int pin) {
+  if (digitalRead(pin) == LOW) {
+    // 1. Wait for 9ms LOW header burst to finish
+    unsigned long t = micros();
+    while (digitalRead(pin) == LOW) {
+      if (micros() - t > 12000) return -1;
+    }
+    // 2. Measure 4.5ms HIGH header space directly
+    t = micros();
+    while (digitalRead(pin) == HIGH) {
+      if (micros() - t > 6000) return -1;
+    }
+    if (micros() - t < 3000) return -1;
+
+    // 3. Read all 32 data bits
+    unsigned long data = 0;
+    for (int i = 0; i < 32; i++) {
+      t = micros();
+      while (digitalRead(pin) == LOW) {
+        if (micros() - t > 2000) return -1;
+      }
+      t = micros();
+      while (digitalRead(pin) == HIGH) {
+        if (micros() - t > 3000) return -1;
+      }
+      if (micros() - t > 1000) {
+        data |= (1UL << i);
+      }
+    }
+    byte cmd = (data >> 16) & 0xFF;
+    Serial.print("Raw IR Code Detected: ");
+    Serial.println(cmd);
+
+    if (cmd == 16 || cmd == 0x0C) return 1;
+    if (cmd == 17 || cmd == 0x18) return 2;
+    if (cmd == 18 || cmd == 0x5E) return 3;
+    if (cmd == 20 || cmd == 0x08) return 4;
+    if (cmd == 12 || cmd == 0x45 || cmd == 0 || cmd == 0x16) return 0;
+  }
+  return -1;
+}
+//
